@@ -1065,7 +1065,7 @@ extern const char *spa_state_to_name(spa_t *spa);
 /* error handling */
 struct zbookmark_phys;
 extern void spa_log_error(spa_t *spa, const zbookmark_phys_t *zb);
-extern void zfs_ereport_post(const char *class, spa_t *spa, vdev_t *vd,
+extern int zfs_ereport_post(const char *class, spa_t *spa, vdev_t *vd,
     const zbookmark_phys_t *zb, zio_t *zio, uint64_t stateoroffset,
     uint64_t length);
 extern nvlist_t *zfs_event_create(spa_t *spa, vdev_t *vd, const char *type,

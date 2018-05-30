@@ -4331,9 +4331,19 @@ zio_done(zio_t *zio)
 	 * We ignore these errors if the device is currently unavailable.
 	 */
 	if (zio->io_delay >= MSEC2NSEC(zio_delay_max)) {
-		if (zio->io_vd != NULL && !vdev_is_dead(zio->io_vd))
-			zfs_ereport_post(FM_EREPORT_ZFS_DELAY, zio->io_spa,
-			    zio->io_vd, &zio->io_bookmark, zio, 0, 0);
+		if (zio->io_vd != NULL && !vdev_is_dead(zio->io_vd)) {
+			/*
+			 * zfs_ereport_post() wont report errors for bogus
+			 * cases like delays on removed drives.  Only increment
+			 * the IO delay counters if the event posts.
+			 */
+			if (zfs_ereport_post(FM_EREPORT_ZFS_DELAY, zio->io_spa,
+			    zio->io_vd, &zio->io_bookmark, zio, 0, 0) == 0) {
+				mutex_enter(&zio->io_vd->vdev_stat_lock);
+				zio->io_vd->vdev_stat.vs_delays++;
+				mutex_exit(&zio->io_vd->vdev_stat_lock);
+			}
+		}
 	}
 
 	if (zio->io_error) {

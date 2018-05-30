@@ -3412,6 +3412,7 @@ vdev_clear(spa_t *spa, vdev_t *vd)
 	vd->vdev_stat.vs_read_errors = 0;
 	vd->vdev_stat.vs_write_errors = 0;
 	vd->vdev_stat.vs_checksum_errors = 0;
+	vd->vdev_stat.vs_delays = 0;
 
 	for (int c = 0; c < vd->vdev_children; c++)
 		vdev_clear(spa, vd->vdev_child[c]);

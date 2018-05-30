@@ -140,7 +140,10 @@ zfs_is_ratelimiting_event(const char *subclass, vdev_t *vd)
 	return (rc);
 }
 
-static void
+/*
+ * Return 0 if the event was actually posted, return 1 if not.
+ */
+static int
 zfs_ereport_start(nvlist_t **ereport_out, nvlist_t **detector_out,
     const char *subclass, spa_t *spa, vdev_t *vd, const zbookmark_phys_t *zb,
     zio_t *zio, uint64_t stateoroffset, uint64_t size)
@@ -156,7 +159,7 @@ zfs_ereport_start(nvlist_t **ereport_out, nvlist_t **detector_out,
 	 */
 	if (spa_load_state(spa) == SPA_LOAD_TRYIMPORT ||
 	    spa_load_state(spa) == SPA_LOAD_RECOVER)
-		return;
+		return (1);
 
 	/*
 	 * If we are in the middle of opening a pool, and the previous attempt
@@ -165,7 +168,7 @@ zfs_ereport_start(nvlist_t **ereport_out, nvlist_t **detector_out,
 	 */
 	if (spa_load_state(spa) != SPA_LOAD_NONE &&
 	    spa->spa_last_open_failed)
-		return;
+		return (1);
 
 	if (zio != NULL) {
 		/*
@@ -174,7 +177,7 @@ zfs_ereport_start(nvlist_t **ereport_out, nvlist_t **detector_out,
 		 */
 		if (zio->io_type != ZIO_TYPE_READ &&
 		    zio->io_type != ZIO_TYPE_WRITE)
-			return;
+			return (1);
 
 		if (vd != NULL) {
 			/*
@@ -187,7 +190,7 @@ zfs_ereport_start(nvlist_t **ereport_out, nvlist_t **detector_out,
 			 * state.
 			 */
 			if (zio->io_vd == vd && !vdev_accessible(vd, zio))
-				return;
+				return (1);
 
 			/*
 			 * Ignore checksum errors for reads from DTL regions of
@@ -197,7 +200,7 @@ zfs_ereport_start(nvlist_t **ereport_out, nvlist_t **detector_out,
 			    zio->io_error == ECKSUM &&
 			    vd->vdev_ops->vdev_op_leaf &&
 			    vdev_dtl_contains(vd, DTL_MISSING, zio->io_txg, 1))
-				return;
+				return (1);
 		}
 	}
 
@@ -208,20 +211,20 @@ zfs_ereport_start(nvlist_t **ereport_out, nvlist_t **detector_out,
 	if (vd != NULL &&
 	    strcmp(subclass, FM_EREPORT_ZFS_PROBE_FAILURE) == 0 &&
 	    (vd->vdev_remove_wanted || vd->vdev_state == VDEV_STATE_REMOVED))
-		return;
+		return (1);
 
 	if ((strcmp(subclass, FM_EREPORT_ZFS_DELAY) == 0) &&
 	    (zio != NULL) && (!zio->io_timestamp)) {
 		/* Ignore bogus delay events */
-		return;
+		return (1);
 	}
 
 	if ((ereport = fm_nvlist_create(NULL)) == NULL)
-		return;
+		return (1);
 
 	if ((detector = fm_nvlist_create(NULL)) == NULL) {
 		fm_nvlist_destroy(ereport, FM_NVA_FREE);
-		return;
+		return (1);
 	}
 
 	/*
@@ -286,6 +289,7 @@ zfs_ereport_start(nvlist_t **ereport_out, nvlist_t **detector_out,
 		vdev_t *pvd = vd->vdev_parent;
 		vdev_queue_t *vq = &vd->vdev_queue;
 		vdev_stat_t *vs = &vd->vdev_stat;
+
 		vdev_t *spare_vd;
 		uint64_t *spare_guids;
 		char **spare_paths;
@@ -332,7 +336,10 @@ zfs_ereport_start(nvlist_t **ereport_out, nvlist_t **detector_out,
 			    FM_EREPORT_PAYLOAD_ZFS_VDEV_WRITE_ERRORS,
 			    DATA_TYPE_UINT64, vs->vs_write_errors,
 			    FM_EREPORT_PAYLOAD_ZFS_VDEV_CKSUM_ERRORS,
-			    DATA_TYPE_UINT64, vs->vs_checksum_errors, NULL);
+			    DATA_TYPE_UINT64, vs->vs_checksum_errors,
+			    FM_EREPORT_PAYLOAD_ZFS_VDEV_DELAYS,
+			    DATA_TYPE_UINT64, vs->vs_delays,
+			    NULL);
 		}
 
 		if (pvd != NULL) {
@@ -427,7 +434,7 @@ zfs_ereport_start(nvlist_t **ereport_out, nvlist_t **detector_out,
 	/*
 	 * Payload for I/Os with corresponding logical information.
 	 */
-	if (zb != NULL && (zio == NULL || zio->io_logical != NULL))
+	if (zb != NULL && (zio == NULL || zio->io_logical != NULL)) {
 		fm_payload_set(ereport,
 		    FM_EREPORT_PAYLOAD_ZFS_ZIO_OBJSET,
 		    DATA_TYPE_UINT64, zb->zb_objset,
@@ -437,11 +444,13 @@ zfs_ereport_start(nvlist_t **ereport_out, nvlist_t **detector_out,
 		    DATA_TYPE_INT64, zb->zb_level,
 		    FM_EREPORT_PAYLOAD_ZFS_ZIO_BLKID,
 		    DATA_TYPE_UINT64, zb->zb_blkid, NULL);
+	}
 
 	mutex_exit(&spa->spa_errlist_lock);
 
 	*ereport_out = ereport;
 	*detector_out = detector;
+	return (0);
 }
 
 /* if it's <= 128 bytes, save the corruption directly */
@@ -765,27 +774,35 @@ annotate_ecksum(nvlist_t *ereport, zio_bad_cksum_t *info,
 }
 #endif
 
-void
+/*
+ * Return 0 if event was posted, EINVAL if there was a problem posting it or
+ * EBUSY if the event was rate limited.
+ */
+int
 zfs_ereport_post(const char *subclass, spa_t *spa, vdev_t *vd,
     const zbookmark_phys_t *zb, zio_t *zio, uint64_t stateoroffset,
     uint64_t size)
 {
+	int rc = 0;
 #ifdef _KERNEL
 	nvlist_t *ereport = NULL;
 	nvlist_t *detector = NULL;
 
 	if (zfs_is_ratelimiting_event(subclass, vd))
-		return;
+		return (EBUSY);
 
-	zfs_ereport_start(&ereport, &detector, subclass, spa, vd,
+	rc = zfs_ereport_start(&ereport, &detector, subclass, spa, vd,
 	    zb, zio, stateoroffset, size);
 
 	if (ereport == NULL)
-		return;
+		return (EINVAL);
 
 	/* Cleanup is handled by the callback function */
-	zfs_zevent_post(ereport, detector, zfs_zevent_post_cb);
+	if (zfs_zevent_post(ereport, detector, zfs_zevent_post_cb) != 0)
+		return (EINVAL);
+
 #endif
+	return (rc);
 }
 
 void
@@ -794,7 +811,6 @@ zfs_ereport_start_checksum(spa_t *spa, vdev_t *vd, const zbookmark_phys_t *zb,
     zio_bad_cksum_t *info)
 {
 	zio_cksum_report_t *report;
-
 
 #ifdef _KERNEL
 	if (zfs_is_ratelimiting_event(FM_EREPORT_ZFS_CHECKSUM, vd))
@@ -874,30 +890,35 @@ zfs_ereport_free_checksum(zio_cksum_report_t *rpt)
 }
 
 
-void
+int
 zfs_ereport_post_checksum(spa_t *spa, vdev_t *vd, const zbookmark_phys_t *zb,
     struct zio *zio, uint64_t offset, uint64_t length,
     const abd_t *good_data, const abd_t *bad_data, zio_bad_cksum_t *zbc)
 {
+	int rc = 0;
 #ifdef _KERNEL
 	nvlist_t *ereport = NULL;
 	nvlist_t *detector = NULL;
 	zfs_ecksum_info_t *info;
 
+	if (zfs_is_ratelimiting_event(FM_EREPORT_ZFS_CHECKSUM, vd))
+		return (EBUSY);
+
 	zfs_ereport_start(&ereport, &detector, FM_EREPORT_ZFS_CHECKSUM,
 	    spa, vd, zb, zio, offset, length);
 
 	if (ereport == NULL)
-		return;
+		return (1);
 
 	info = annotate_ecksum(ereport, zbc, good_data, bad_data, length,
 	    B_FALSE);
 
 	if (info != NULL) {
-		zfs_zevent_post(ereport, detector, zfs_zevent_post_cb);
+		rc = zfs_zevent_post(ereport, detector, zfs_zevent_post_cb);
 		kmem_free(info, sizeof (*info));
 	}
 #endif
+	return (rc);
 }
 
 /*

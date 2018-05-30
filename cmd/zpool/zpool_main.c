@@ -356,8 +356,8 @@ get_usage(zpool_help_t idx)
 	case HELP_SCRUB:
 		return (gettext("\tscrub [-s | -p] <pool> ...\n"));
 	case HELP_STATUS:
-		return (gettext("\tstatus [-c [script1,script2,...]] [-gLPvxD]"
-		    "[-T d|u] [pool] ... \n"
+		return (gettext("\tstatus [-c [script1,script2,...]] "
+		    "[-dgLpPvxD]  [-T d|u] [pool] ... \n"
 		    "\t    [interval [count]]\n"));
 	case HELP_UPGRADE:
 		return (gettext("\tupgrade\n"
@@ -1631,10 +1631,12 @@ typedef struct status_cbdata {
 	int		cb_namewidth;
 	boolean_t	cb_allpools;
 	boolean_t	cb_verbose;
+	boolean_t	cb_literal;
 	boolean_t	cb_explain;
 	boolean_t	cb_first;
 	boolean_t	cb_dedup_stats;
 	boolean_t	cb_print_status;
+	boolean_t	cb_show_delays;
 	vdev_cmd_data_list_t	*vcdl;
 } status_cbdata_t;
 
@@ -1750,10 +1752,31 @@ print_status_config(zpool_handle_t *zhp, status_cbdata_t *cb, const char *name,
 	    name, state);
 
 	if (!isspare) {
-		zfs_nicenum(vs->vs_read_errors, rbuf, sizeof (rbuf));
-		zfs_nicenum(vs->vs_write_errors, wbuf, sizeof (wbuf));
-		zfs_nicenum(vs->vs_checksum_errors, cbuf, sizeof (cbuf));
-		(void) printf(" %5s %5s %5s", rbuf, wbuf, cbuf);
+		if (cb->cb_literal) {
+			printf(" %5llu %5llu %5llu",
+			    (u_longlong_t)vs->vs_read_errors,
+			    (u_longlong_t)vs->vs_write_errors,
+			    (u_longlong_t)vs->vs_checksum_errors);
+		} else {
+			zfs_nicenum(vs->vs_read_errors, rbuf, sizeof (rbuf));
+			zfs_nicenum(vs->vs_write_errors, wbuf, sizeof (wbuf));
+			zfs_nicenum(vs->vs_checksum_errors, cbuf,
+			    sizeof (cbuf));
+			printf(" %5s %5s %5s", rbuf, wbuf, cbuf);
+		}
+
+		if (cb->cb_show_delays) {
+			if (children == 0) /* Only leafs vdevs have delays */
+				zfs_nicenum(vs->vs_delays, rbuf, sizeof (rbuf));
+			else
+				snprintf(rbuf, sizeof (rbuf), "-");
+
+			if (cb->cb_literal)
+				printf(" %5llu", (u_longlong_t)vs->vs_delays);
+			else
+				printf(" %5s", rbuf);
+		}
+
 	}
 
 	if (nvlist_lookup_uint64(nv, ZPOOL_CONFIG_NOT_PRESENT,
@@ -6961,6 +6984,9 @@ status_callback(zpool_handle_t *zhp, void *data)
 		    cbp->cb_namewidth, "NAME", "STATE", "READ", "WRITE",
 		    "CKSUM");
 
+		if (cbp->cb_show_delays)
+			(void) printf(gettext(" DELAY"));
+
 		if (cbp->vcdl != NULL)
 			print_cmd_columns(cbp->vcdl, 0);
 
@@ -7024,12 +7050,14 @@ status_callback(zpool_handle_t *zhp, void *data)
 }
 
 /*
- * zpool status [-c [script1,script2,...]] [-gLPvx] [-T d|u] [pool] ...
+ * zpool status [-c [script1,script2,...]] [-dgLpPsSvx] [-T d|u] [pool] ...
  *              [interval [count]]
  *
  *	-c CMD	For each vdev, run command CMD
+ *	-d	Display IO delays column
  *	-g	Display guid for individual vdev name.
  *	-L	Follow links when resolving vdev path name.
+ *	-p	Display values in parsable (exact) format.
  *	-P	Display full path for vdev name.
  *	-v	Display complete error logs
  *	-x	Display only pools with potential problems
@@ -7049,7 +7077,7 @@ zpool_do_status(int argc, char **argv)
 	char *cmd = NULL;
 
 	/* check options */
-	while ((c = getopt(argc, argv, "c:gLPvxDT:")) != -1) {
+	while ((c = getopt(argc, argv, "c:dgLpPvxDT:")) != -1) {
 		switch (c) {
 		case 'c':
 			if (cmd != NULL) {
@@ -7075,11 +7103,17 @@ zpool_do_status(int argc, char **argv)
 			}
 			cmd = optarg;
 			break;
+		case 'd':
+			cb.cb_show_delays = B_TRUE;
+			break;
 		case 'g':
 			cb.cb_name_flags |= VDEV_NAME_GUID;
 			break;
 		case 'L':
 			cb.cb_name_flags |= VDEV_NAME_FOLLOW_LINKS;
+			break;
+		case 'p':
+			cb.cb_literal = B_TRUE;
 			break;
 		case 'P':
 			cb.cb_name_flags |= VDEV_NAME_PATH;

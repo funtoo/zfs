@@ -16,6 +16,7 @@ SUBDIRS = \
 	cp_files \
 	ctime \
 	deadman \
+	delays \
 	delegate \
 	devices \
 	events \

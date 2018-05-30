@@ -179,7 +179,7 @@
 .Nm
 .Cm status
 .Oo Fl c Ar SCRIPT Oc
-.Op Fl gLPvxD
+.Op Fl dDgLpPvx
 .Op Fl T Sy u Ns | Ns Sy d
 .Oo Ar pool Oc Ns ...
 .Op Ar interval Op Ar count
@@ -2105,7 +2105,7 @@ and automatically import it.
 .Nm
 .Cm status
 .Op Fl c Op Ar SCRIPT1 Ns Oo , Ns Ar SCRIPT2 Oc Ns ...
-.Op Fl gLPvxD
+.Op Fl dDgLpPvx
 .Op Fl T Sy u Ns | Ns Sy d
 .Oo Ar pool Oc Ns ...
 .Op Ar interval Op Ar count
@@ -2132,6 +2132,11 @@ output.  See the
 option of
 .Nm zpool Cm iostat
 for complete details.
+.It Fl d
+Display the number of leaf VDEV IO delays.  This is the number of IOs that
+didn't complete in \fBzio_delay_max\fR milliseconds.  This does not
+necessarily mean the IOs failed to complete, just took an unreasonably
+long amount of time.
 .It Fl g
 Display vdev GUIDs instead of the normal device names. These GUIDs
 can be used in place of device names for the zpool
@@ -2141,6 +2146,8 @@ Display real paths for vdevs resolving all symbolic links. This can
 be used to look up the current block device name regardless of the
 .Pa /dev/disk/
 path used to open it.
+.It Fl p
+Display numbers in parsable (exact) values.
 .It Fl P
 Display full paths for vdevs instead of only the last component of
 the path. This can be used in conjunction with the
