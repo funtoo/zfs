@@ -2173,6 +2173,17 @@ function wait_for_degraded
 	return 0
 }
 
+# Start a scrub and return after it finishes.
+# $1:  Pool name
+function scrub_and_wait
+{
+	typeset POOL=$1
+	zpool scrub $POOL
+	while ! is_pool_scrubbed $POOL ; do
+		sleep 1
+	done
+}
+
 #
 # Use create_pool()/destroy_pool() to clean up the information in
 # in the given disk to avoid slice overlapping.
